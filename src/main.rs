@@ -3,7 +3,7 @@ use evtx::EvtxParser;
 use std::collections::HashMap;
 //use reqwest::Client;
 use serde::Serialize;
-use serde_json; //for debugging
+use serde_json::Value; //for debugging
 use xmltree::Element;
 use chrono::{DateTime};
 
@@ -12,7 +12,7 @@ struct EventPayload{
     event_id: u64, //whitelist windows event log
     event_source: String, //PC hostname
     event_desc: String, //short description from hashmap
-    event_verbose: String, //detail from r.data
+    event_verbose:Value , //detail from r.data
 }
 
 #[derive(Serialize)]
@@ -80,16 +80,22 @@ fn get_date_evtx(r:&String)->i64{
     return 0i64;
 }
 
-fn get_event_data(r:&String)->String{
+fn get_event_data(r:&String)-> Value{
+    let mut map_json: HashMap<String,String> = HashMap::new();
     let xml_data = Element::parse(r.as_bytes()).expect("Failed to parse XML;");
+    let unknown_name = String::from("unknown");
+
     if let Some(eventdata_xml) = xml_data.get_child("EventData"){
-        let mut buffer = Vec::new();
-        eventdata_xml.write(&mut buffer).expect("Failed to write XML");
-        let xml = String::from_utf8(buffer).expect("Failed to convert to UTF-8");
-        return xml;
+        for element in &eventdata_xml.children{
+            if let xmltree::XMLNode::Element(data) = element{
+                let name_attr = data.attributes.get("Name").map(String::as_str).unwrap_or(&unknown_name);
+                let value = data.get_text().map(|cow| cow.into_owned()).unwrap_or_else(||"unknown".to_string());
+                map_json.insert(name_attr.to_string(),value.to_string());
+            }
+        }
     }
 
-    return "".to_string();
+    return serde_json::json!(map_json);
 }
 
 fn parse_evtx(){
@@ -111,13 +117,12 @@ fn parse_evtx(){
                 if evtx_whitelist_map.contains_key(&r.event_record_id){
                     if let Some(payload_desc) = evtx_whitelist_map.get(&r.event_record_id){
                         let epoch_timestamp:i64 = get_date_evtx(&r.data);
-                        let eventdata:String = get_event_data(&r.data);
                         let evtx_payload_json = Payload{
                             event: EventPayload{
                                 event_id: r.event_record_id,
                                 event_source: gethostname().to_string_lossy().into_owned(),
                                 event_desc: payload_desc.to_string(),
-                                event_verbose: eventdata,
+                                event_verbose: get_event_data(&r.data),
                             },
                             sourcetype:"t2log_automation_wineventlog".to_string(),
                             time:epoch_timestamp,
