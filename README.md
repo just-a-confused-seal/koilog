@@ -5,7 +5,9 @@ Hi welcome to this simple repository. Basically the purpose of this repository i
 
 [] Make configuration.ini parser and rules
 
-[] Create function to parse Eventdata xml data to json
+[X] Create function to parse Eventdata xml data to json
+
+[X] Add Logic to get only event log that within range n-minutes
 
 [] ....
 
