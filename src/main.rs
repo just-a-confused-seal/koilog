@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value; //for debugging
 use xmltree::Element;
-use chrono::{DateTime};
+use chrono::{DateTime,Local};
 
 #[derive(Serialize)]
 struct EventPayload{
@@ -22,11 +22,31 @@ struct Payload{
     time:i64, //timestamp
 }
 
+/*#[derive(Serialize)]
+struct EvtxMitre{
+    event_id: u64,
+    event_desc: String,
+    mitre_id_tactic: String,
+    mitre_id_technique: String,
+    mitre_description: String,
+}*/
+
 fn banner(){
     println!("--------------------------");
     println!("KOILOG - WINDOWS EVENT LOG - {:?}", gethostname());
     println!("--------------------------");
 }
+
+/*fn build_evtx_dict_mitre() -> EvtxMitre{
+    let mut evtxmitre_list: Vec<EvtxMitre> = Vec::new();
+    evtx_whitelist_map.push(EvtxMitre{
+        event_id: 0u64,
+        event_desc: "".to_string(),
+        mitre_id_tactic: "".to_string(),
+        mitre_id_technique: "".to_string(),
+        mitre_description: "".to_string(),
+    });
+}*/
 
 fn build_evtx_dict() -> HashMap<u64, String>{
     let mut evtx_whitelist_map: HashMap<u64,String> = HashMap::new();
@@ -110,33 +130,38 @@ fn parse_evtx(){
     };
 
     let evtx_whitelist_map = build_evtx_dict();
-
+    let current_timestamp = Local::now().timestamp() - 300i64;
+    let mut evtx_json_list: Vec<Payload> = Vec::new();
     for record in parser.records(){
         match record{
             Ok(r) => {
                 if evtx_whitelist_map.contains_key(&r.event_record_id){
                     if let Some(payload_desc) = evtx_whitelist_map.get(&r.event_record_id){
                         let epoch_timestamp:i64 = get_date_evtx(&r.data);
-                        let evtx_payload_json = Payload{
-                            event: EventPayload{
-                                event_id: r.event_record_id,
-                                event_source: gethostname().to_string_lossy().into_owned(),
-                                event_desc: payload_desc.to_string(),
-                                event_verbose: get_event_data(&r.data),
-                            },
-                            sourcetype:"t2log_automation_wineventlog".to_string(),
-                            time:epoch_timestamp,
-                        };
                         
-                        let json_string = serde_json::to_string_pretty(&evtx_payload_json).unwrap();
-                        println!("{}",json_string);
-                        
+                        if epoch_timestamp > current_timestamp{
+                            let evtx_payload_json = Payload{
+                                event: EventPayload{
+                                    event_id: r.event_record_id,
+                                    event_source: gethostname().to_string_lossy().into_owned(),
+                                    event_desc: payload_desc.to_string(),
+                                    event_verbose: get_event_data(&r.data),
+                                },
+                                sourcetype:"t2log_automation_wineventlog".to_string(),
+                                time:epoch_timestamp,
+                            };
+                            evtx_json_list.push(evtx_payload_json);
+                            
+                            let json_string = serde_json::to_string_pretty(&evtx_payload_json).unwrap();
+                            println!("{}",json_string);
+                        }
                     }
                 }
             },
             Err(e) => eprintln!("Error: {}",e),
         }
     }
+    
 }
 
 
