@@ -3,11 +3,13 @@ Hi welcome to this simple repository. Basically the purpose of this repository i
 ## To do list:
 [] Make MITRE ATT&cK rules mapping for program
 
-[] Make configuration.ini parser and rules
+[X] Make configuration.ini parser and rules
 
 [X] Create function to parse Eventdata xml data to json
 
 [X] Add Logic to get only event log that within range n-minutes
+
+[X] Add HTTP Post feature to send JSON evendata from client to dashboard
 
 [] ....
 

@@ -1,11 +1,12 @@
 use gethostname::gethostname;
 use evtx::EvtxParser;
 use std::collections::HashMap;
-//use reqwest::Client;
+use reqwest::blocking::{Client};
 use serde::Serialize;
 use serde_json::Value; //for debugging
 use xmltree::Element;
-use chrono::{DateTime,Local};
+use chrono::{Local};
+use configparser::ini::{Ini};
 
 #[derive(Serialize)]
 struct EventPayload{
@@ -22,31 +23,18 @@ struct Payload{
     time:i64, //timestamp
 }
 
-/*#[derive(Serialize)]
-struct EvtxMitre{
-    event_id: u64,
-    event_desc: String,
-    mitre_id_tactic: String,
-    mitre_id_technique: String,
-    mitre_description: String,
-}*/
+struct SplunkIni{
+    splunk_status: String,
+    splunk_url: String,
+    splunk_mitre_enrichment: String,
+    splunk_auth_key:String,
+}
 
 fn banner(){
     println!("--------------------------");
     println!("KOILOG - WINDOWS EVENT LOG - {:?}", gethostname());
     println!("--------------------------");
 }
-
-/*fn build_evtx_dict_mitre() -> EvtxMitre{
-    let mut evtxmitre_list: Vec<EvtxMitre> = Vec::new();
-    evtx_whitelist_map.push(EvtxMitre{
-        event_id: 0u64,
-        event_desc: "".to_string(),
-        mitre_id_tactic: "".to_string(),
-        mitre_id_technique: "".to_string(),
-        mitre_description: "".to_string(),
-    });
-}*/
 
 fn build_evtx_dict() -> HashMap<u64, String>{
     let mut evtx_whitelist_map: HashMap<u64,String> = HashMap::new();
@@ -73,31 +61,25 @@ fn build_evtx_dict() -> HashMap<u64, String>{
     evtx_whitelist_map.insert(4663u64,"An attempt was made to access an object".to_string());
     evtx_whitelist_map.insert(4658u64,"The handle to an object was closed".to_string());
     evtx_whitelist_map.insert(4690u64,"An attempt was made to duplicate a handle to an object".to_string());
-    evtx_whitelist_map.insert(435244u64,"TESTING".to_string());
 
     return evtx_whitelist_map;
 }
 
-fn get_date_evtx(r:&String)->i64{
-    let xml_data = Element::parse(r.as_bytes()).expect("Failed to parse XML;");
-    //println!("Root element: {}", xml_data.name);
+fn get_event_id_data(r:&String) -> u64{
+    let xml_data = Element::parse(r.as_bytes()).expect("Failed to parse xml;");
 
     if let Some(system_xml) = xml_data.get_child("System"){
-        if let Some(time_created_xml) = system_xml.get_child("TimeCreated"){
-            if let Some(text) = time_created_xml.attributes.get("SystemTime"){
-                match DateTime::parse_from_rfc3339(text){
-                    Ok(parsed_time) => {
-                        let epoch = parsed_time.timestamp();
-                        return epoch;
-                    }Err(_e) =>{
-                        return 0i64;
-                    }
-                }
+        if let Some(event_id) = system_xml.get_child("EventID"){
+            for child in &event_id.children{
+                if let xmltree::XMLNode::Text(text) = child{
+                    let event_id:u64 = text.parse().expect("Failed parsed to u64");
+                    return event_id 
+                } 
             }
         }
     }
 
-    return 0i64;
+    return 0u64;
 }
 
 fn get_event_data(r:&String)-> Value{
@@ -118,42 +100,48 @@ fn get_event_data(r:&String)-> Value{
     return serde_json::json!(map_json);
 }
 
-fn parse_evtx(){
+fn parse_evtx() -> Vec<Payload>{
 
     let local_evtx_security = "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx";
+    let mut evtx_json_list: Vec<Payload> = Vec::new();
     let mut parser = match EvtxParser::from_path(local_evtx_security){
         Ok(p) => p,
         Err(e) =>{
             eprintln!("Failed to open EVTX file: {}, are you running this as admin?",e);
-            return;
+            return evtx_json_list;
         }
     };
 
     let evtx_whitelist_map = build_evtx_dict();
     let current_timestamp = Local::now().timestamp() - 300i64;
-    let mut evtx_json_list: Vec<Payload> = Vec::new();
+    
     for record in parser.records(){
         match record{
             Ok(r) => {
-                if evtx_whitelist_map.contains_key(&r.event_record_id){
-                    if let Some(payload_desc) = evtx_whitelist_map.get(&r.event_record_id){
-                        let epoch_timestamp:i64 = get_date_evtx(&r.data);
-                        
-                        if epoch_timestamp > current_timestamp{
-                            let evtx_payload_json = Payload{
-                                event: EventPayload{
-                                    event_id: r.event_record_id,
-                                    event_source: gethostname().to_string_lossy().into_owned(),
-                                    event_desc: payload_desc.to_string(),
-                                    event_verbose: get_event_data(&r.data),
-                                },
-                                sourcetype:"t2log_automation_wineventlog".to_string(),
-                                time:epoch_timestamp,
-                            };
-                            evtx_json_list.push(evtx_payload_json);
+                let epoch_timestamp:i64 = r.timestamp.timestamp() as i64;
+                if epoch_timestamp > current_timestamp{
+                    let event_id = get_event_id_data(&r.data);
+                    if evtx_whitelist_map.contains_key(&event_id){
+                        if let Some(payload_desc) = evtx_whitelist_map.get(&event_id){
+                            //println!("{}",r.data);
                             
-                            let json_string = serde_json::to_string_pretty(&evtx_payload_json).unwrap();
-                            println!("{}",json_string);
+                                let evtx_payload_json = Payload{
+                                    event: EventPayload{
+                                        event_id: event_id,
+                                        event_source: gethostname().to_string_lossy().into_owned(),
+                                        event_desc: payload_desc.to_string(),
+                                        event_verbose: get_event_data(&r.data),
+                                    },
+                                    sourcetype:"t2log_automation_wineventlog".to_string(),
+                                    time:epoch_timestamp,
+                                };
+
+                                //uncomment this and comment above line to do debugging in json payload
+                                //let json_string = serde_json::to_string_pretty(&evtx_payload_json).unwrap();
+                                //println!("{}",json_string);
+
+                                //i'm the above line don't forget to uncomment me later
+                                evtx_json_list.push(evtx_payload_json);
                         }
                     }
                 }
@@ -161,11 +149,72 @@ fn parse_evtx(){
             Err(e) => eprintln!("Error: {}",e),
         }
     }
+
+    return evtx_json_list;
     
 }
 
+fn parsed_koi_ini() -> SplunkIni{
+    let mut config = Ini::new();
+    let _map_koi_ini = config.load("koi.ini");
+    //println!("{:?}",map_koi_ini);
+    
+    //let check_prop = config.get("PROP","prop_status").unwrap();
+    let check_splunk = config.get("SPLUNK","splunk_status").unwrap();
+
+    if check_splunk == "on"{
+        println!("KOILOG - Splunk configuration - ON");
+        let splunk_struct = SplunkIni{
+            splunk_status: config.get("SPLUNK","splunk_status").unwrap(),
+            splunk_url: config.get("SPLUNK","splunk_url").unwrap(),
+            splunk_mitre_enrichment: config.get("SPLUNK","splunk_mitre_enrichment").unwrap(),
+            splunk_auth_key:config.get("SPLUNK","splunk_auth_key").unwrap(),
+        };
+        return splunk_struct;
+    }
+        let splunk_empty = SplunkIni{
+            splunk_status: "".to_string(),
+            splunk_url: "".to_string(),
+            splunk_mitre_enrichment: "".to_string(),
+            splunk_auth_key:"".to_string(),
+        };
+
+        return splunk_empty;
+    
+}
+
+fn check_splunk_hec(url: &String) -> i64{
+    let http_client: Client = Client::new();
+    let http_result = http_client.get(url).send();
+    if http_result.is_ok(){
+        println!("URL {} is alive!!!!",url);
+        return 1i64;
+    }else{
+        println!("URL {} is not alive!!!!",url);
+        return -1i64;
+    }
+}
+
+fn send_splunk_hec(SplunkConfig: SplunkIni,evtx_payload_list:Vec<Payload>){
+    let http_client: Client = Client::new();
+    let ndjson = evtx_payload_list.iter().map(|p| serde_json::to_string(p).unwrap()).collect::<Vec<_>>().join("\n");
+    let auth_key = format!("Splunk {}",SplunkConfig.splunk_auth_key);
+
+    let http_post_send = http_client.post(SplunkConfig.splunk_url).body(ndjson).header("User-Agent","Koilog_Agent_V.0.0.1").header("Authorization",auth_key).send();
+    if http_post_send.is_ok(){
+        println!("{:#?}",http_post_send.ok().unwrap().text().unwrap());
+    }else{
+        println!("Not OK");
+    }
+}
 
 fn main() {
     banner();
-    parse_evtx();
+    let evtx_list:Vec<Payload> = parse_evtx();
+    let koi_config:SplunkIni = parsed_koi_ini();
+    let status_url:i64 = check_splunk_hec(&koi_config.splunk_url);
+    if status_url == 1i64{
+        println!("Proceed to send Log!");
+        send_splunk_hec(koi_config,evtx_list);
+    }
 }
