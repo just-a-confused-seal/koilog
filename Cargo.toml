@@ -14,3 +14,4 @@ quick-xml = "0.38.1"
 chrono={version="0.4.41",features=["serde"]}
 xmltree = "0.10"
 configparser = "3.1.0"
+thiserror = "2.0.16"

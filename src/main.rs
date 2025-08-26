@@ -7,6 +7,17 @@ use serde_json::Value; //for debugging
 use xmltree::Element;
 use chrono::{Local};
 use configparser::ini::{Ini};
+use thiserror::Error;
+use std::process;
+
+#[derive(Error, Debug)]
+pub enum Error{
+    #[error("Could not find windows event log - security.evtx")]
+    EvtxPathNotFound,
+
+    #[error("Coule not find koi.ini - configuration file")]
+    KoiPathNotFound,
+}
 
 #[derive(Serialize)]
 struct EventPayload{
@@ -24,9 +35,8 @@ struct Payload{
 }
 
 struct SplunkIni{
-    splunk_status: String,
     splunk_url: String,
-    splunk_mitre_enrichment: String,
+    splunk_mitre_enrichment: String, //gonna used this latter
     splunk_auth_key:String,
 }
 
@@ -104,11 +114,11 @@ fn parse_evtx() -> Vec<Payload>{
 
     let local_evtx_security = "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx";
     let mut evtx_json_list: Vec<Payload> = Vec::new();
-    let mut parser = match EvtxParser::from_path(local_evtx_security){
+    let mut parser = match EvtxParser::from_path(local_evtx_security).map_err(|_| Error::EvtxPathNotFound){
         Ok(p) => p,
         Err(e) =>{
-            eprintln!("Failed to open EVTX file: {}, are you running this as admin?",e);
-            return evtx_json_list;
+            eprintln!("Failed to open EVTX file: {}",e);
+            process::exit(1);
         }
     };
 
@@ -156,7 +166,13 @@ fn parse_evtx() -> Vec<Payload>{
 
 fn parsed_koi_ini() -> SplunkIni{
     let mut config = Ini::new();
-    let _map_koi_ini = config.load("koi.ini");
+    let _map_koi_ini = match config.load("koi.ini").map_err(|_| Error::KoiPathNotFound){
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to open koi.ini file: {}",e);
+            process::exit(1);
+        }
+    };
     //println!("{:?}",map_koi_ini);
     
     //let check_prop = config.get("PROP","prop_status").unwrap();
@@ -165,7 +181,6 @@ fn parsed_koi_ini() -> SplunkIni{
     if check_splunk == "on"{
         println!("KOILOG - Splunk configuration - ON");
         let splunk_struct = SplunkIni{
-            splunk_status: config.get("SPLUNK","splunk_status").unwrap(),
             splunk_url: config.get("SPLUNK","splunk_url").unwrap(),
             splunk_mitre_enrichment: config.get("SPLUNK","splunk_mitre_enrichment").unwrap(),
             splunk_auth_key:config.get("SPLUNK","splunk_auth_key").unwrap(),
@@ -173,7 +188,6 @@ fn parsed_koi_ini() -> SplunkIni{
         return splunk_struct;
     }
         let splunk_empty = SplunkIni{
-            splunk_status: "".to_string(),
             splunk_url: "".to_string(),
             splunk_mitre_enrichment: "".to_string(),
             splunk_auth_key:"".to_string(),
@@ -195,12 +209,12 @@ fn check_splunk_hec(url: &String) -> i64{
     }
 }
 
-fn send_splunk_hec(SplunkConfig: SplunkIni,evtx_payload_list:Vec<Payload>){
+fn send_splunk_hec(splunk_config: SplunkIni,evtx_payload_list:Vec<Payload>){
     let http_client: Client = Client::new();
     let ndjson = evtx_payload_list.iter().map(|p| serde_json::to_string(p).unwrap()).collect::<Vec<_>>().join("\n");
-    let auth_key = format!("Splunk {}",SplunkConfig.splunk_auth_key);
+    let auth_key = format!("Splunk {}",splunk_config.splunk_auth_key);
 
-    let http_post_send = http_client.post(SplunkConfig.splunk_url).body(ndjson).header("User-Agent","Koilog_Agent_V.0.0.1").header("Authorization",auth_key).send();
+    let http_post_send = http_client.post(splunk_config.splunk_url).body(ndjson).header("User-Agent","Koilog_Agent_V.0.0.1").header("Authorization",auth_key).send();
     if http_post_send.is_ok(){
         println!("{:#?}",http_post_send.ok().unwrap().text().unwrap());
     }else{

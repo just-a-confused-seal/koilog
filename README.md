@@ -11,5 +11,9 @@ Hi welcome to this simple repository. Basically the purpose of this repository i
 
 [X] Add HTTP Post feature to send JSON evendata from client to dashboard
 
+[X] Add Custom Error Handling in program
+
+[] Add features to get evtx log through windows API
+
 [] ....
 
